@@ -1,0 +1,31 @@
+write "<!DOCTYPE html>";
+
+html lang="en" {
+	head {
+		include "templates/common.tmpl";
+		title [Example page - home]
+	}
+
+	body class="center-col" {
+		include "templates/header.tmpl";
+
+		main {
+			h2 [## Hello world!]
+			[This is the example page of ] a href="https://lutfisk.net/git/lwebsrv" [lwebsrv] [, a simple C23 web server.]
+			br; br;
+			h3 [### Lorem impsum]
+			[Lorem ipsum etiam ad sem pharetra eget id congue, tortor aptent donec magna eu habitasse et, ad enim dolor sapien consequat luctus leo. ]
+			[Cubilia dictum et convallis tristique nulla scelerisque sed lobortis ullamcorper, a feugiat cubilia dui quisque nulla phasellus curae feugiat, ]
+			[bibendum ante pharetra rhoncus ligula aptent lectus consectetur. ]
+			[Venenatis augue quam tellus eros enim torquent phasellus ut viverra metus ultricies, velit ullamcorper blandit ad mollis volutpat platea rutrum eu.]
+			br; br;
+			h3 [### Habitant urna]
+			[Habitant urna metus tristique posuere interdum fames sem enim pretium, platea egestas erat lobortis eros feugiat augue aliquam inceptos, quam ]
+			[scelerisque tortor cras consequat justo nunc taciti. Curabitur fusce at aliquam posuere magna bibendum elementum molestie venenatis in, consequat ]
+			[imperdiet sed lacinia erat etiam potenti dolor vestibulum mollis, aliquam nullam etiam viverra ut lectus urna egestas urna. Lacus auctor primis ]
+			[nibh est libero porttitor, neque laoreet libero pellentesque blandit curabitur justo, tincidunt quisque non ut etiam.]
+		}
+
+		include "templates/footer.tmpl";
+	}
+}
