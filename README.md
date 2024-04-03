@@ -1,5 +1,5 @@
 # lwebsrv
-An http/https server, with a its own simple template format aiming for easy interoperability with your C code.
+An http/https server, with its own simple template format aiming for easy interoperability with your C code.
 This repository comes an example page.
 All configuration is done in the source code before building.
 
