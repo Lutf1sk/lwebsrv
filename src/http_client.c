@@ -17,8 +17,8 @@ lt_err_t lt_http_client_connect(lt_http_client_t* out_client, const lt_sockaddr_
 		return err;
 	}
 
-	if (use_https) {
 #ifdef SSL
+	if (use_https) {
 		lt_ssl_connection_t* ssl = lt_ssl_connect(socket, host);
 		if (!ssl) {
 			lt_socket_destroy(socket, alloc);
@@ -26,23 +26,21 @@ lt_err_t lt_http_client_connect(lt_http_client_t* out_client, const lt_sockaddr_
 		}
 
 		out_client->conn = ssl;
-#else
-		lt_werrf("lt_http_client_connect called with use_http=1, but -DLT_SSL was not set, falling back to http.\n");
-#endif
 	}
-	out_client->host = host;
-	out_client->socket = socket;
-#ifdef SSL
 	out_client->use_https = use_https;
 #else
 	out_client->use_https = 0;
 #endif
+	out_client->host = host;
+	out_client->socket = socket;
 	return LT_SUCCESS;
 }
 
 void lt_http_client_destroy(const lt_http_client_t* client, lt_alloc_t* alloc) {
 #ifdef SSL
-	lt_ssl_connection_destroy(client->conn);
+	if (client->use_https) {
+		lt_ssl_connection_destroy(client->conn);
+	}
 #endif
 	lt_socket_destroy(client->socket, alloc);
 }
