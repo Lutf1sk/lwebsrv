@@ -8,7 +8,8 @@ SRC := \
 	src/resource.c \
 	src/mime.c \
 	src/markdown.c \
-	src/http_client.c
+	src/http_client.c \
+	src/filetree.c
 
 LT_PATH := lt
 LT_ENV :=
