@@ -32,9 +32,12 @@ lstr_t urldecode(lstr_t str) {
 		u64 dec;
 		if (lt_lshextou(enc, &dec) != LT_SUCCESS) {
 			lt_werrf("invalid url encoded escape sequence '%%%S'\n", enc);
+			lt_strstream_writec(&ss, '%');
+			lt_strstream_writels(&ss, enc);
 		}
-
-		lt_strstream_writec(&ss, (u8)dec);
+		else {
+			lt_strstream_writec(&ss, (u8)dec);
+		}
 
 		it += 2;
 	}

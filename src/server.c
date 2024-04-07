@@ -14,114 +14,120 @@
 #include "template.h"
 
 static
-void on_accept(server_t* server, connection_t* c) {
-	lt_io_callback_t write_callb = (lt_io_callback_t)lt_socket_send;
-	lt_io_callback_t read_callb = (lt_io_callback_t)lt_socket_recv;
-	void* callb_usr = c->socket;
+void client_proc(connection_t* conn) {
+	lt_err_t err;
+
+	server_t* server = conn->server;
+
+	do {
+		lt_mzero(&conn->request, sizeof(conn->request));
+		lt_mzero(&conn->response, sizeof(conn->response));
+		lt_mzero(&conn->uri, sizeof(conn->uri));
+		conn->response_mime_type = NLSTR();
+
+		// set up i/o callbacks
+		LT_ASSERT(conn->socket);
+		lt_io_callback_t write_callb = (lt_io_callback_t)lt_socket_send;
+		lt_io_callback_t read_callb = (lt_io_callback_t)lt_socket_recv;
+		void* callb_usr = conn->socket;
+#ifdef SSL
+		if (server->use_https) {
+			LT_ASSERT(conn->ssl_conn);
+			write_callb = (lt_io_callback_t)lt_ssl_send_fixed;
+			read_callb = (lt_io_callback_t)lt_ssl_recv_fixed;
+			callb_usr = conn->ssl_conn;
+		}
+#endif
+
+		// create response
+		if ((err = lt_http_msg_create(&conn->response, lt_libc_heap))) {
+			lt_werrf("failed to create response message: %S\n", lt_err_str(err));
+			goto err0;
+		}
+		conn->response.version = LT_HTTP_1_1;
+		conn->response.response_status_code = 200;
+		conn->response.response_status_msg = CLSTR("OK");
+
+		// read and parse request
+		if ((err = lt_http_parse_request(&conn->request, read_callb, callb_usr, lt_libc_heap))) {
+			if (err != LT_ERR_CLOSED) {
+				lt_werrf("failed to parse http request: %S\n", lt_err_str(err));
+				conn->keep_alive = 0;
+			}
+			else {
+				conn->keep_alive = 0;
+			}
+			goto err1;
+		}
+
+		// parse uri
+		conn->uri = parse_uri(conn->request.request_file);
+
+		// logging
+		u32 addr = lt_sockaddr_ipv4_addr(&conn->addr);
+		lt_ierrf("["FG_BYELLOW"C_%hd"RESET"] HTTP/%uw.%uw %S %S\n", addr,
+				LT_HTTP_VERSION_MAJOR(conn->request.version),
+				LT_HTTP_VERSION_MINOR(conn->request.version),
+				lt_http_method_str(conn->request.request_method),
+				conn->request.request_file);
+
+		// read request connection header
+		lstr_t* conn_header = lt_http_find_header(&conn->request, CLSTR("Connection"));
+		conn->keep_alive = conn_header && lt_lseq_nocase(*conn_header, CLSTR("keep-alive"));
+
+
+		// initialize template variables
+		lt_hashtab_init(&conn->vars);
+
+		// route parsed request
+		if (server->on_request && server->on_request(conn))
+			; // noop
+		else if (srv_handle_mapped_request(server, conn))
+			; // noop
+		else if (server->on_unmapped_request) {
+			server->on_unmapped_request(conn);
+		}
+		else {
+			LT_ASSERT(server->on_404);
+			server->on_404(conn);
+		}
+
+		// add response connection header
+		lt_http_add_header(&conn->response, CLSTR("Connection"), conn->keep_alive ? CLSTR("keep-alive") : CLSTR("close"));
+		if (conn->keep_alive) {
+			lt_http_add_header(&conn->response, CLSTR("Keep-Alive"), CLSTR("timeout=5, max=99"));
+		}
+		lt_http_add_header(&conn->response, CLSTR("Content-Type"), conn->response_mime_type);
+
+		// write response
+		if ((err = lt_http_write_response(&conn->response, write_callb, callb_usr))) {
+			lt_werrf("failed to send response message: %S\n", lt_err_str(err));
+		}
+
+		// cleanup
+		lt_foreach_hashtab_entry(variable_t, var, &conn->vars) {
+			lt_mfree(lt_libc_heap, var->val.str);
+			lt_mfree(lt_libc_heap, var);
+		}
+		lt_hashtab_free(&conn->vars, lt_libc_heap);
+		free_uri(&conn->uri);
+		lt_http_msg_destroy(&conn->request, lt_libc_heap);
+		lt_http_msg_destroy(&conn->response, lt_libc_heap);
+		continue;
+
+		err1:	lt_http_msg_destroy(&conn->response, lt_libc_heap);
+		err0:	break;
+	} while (conn->keep_alive);
 
 #ifdef SSL
 	if (server->use_https) {
-		write_callb = (lt_io_callback_t)lt_ssl_send;
-		read_callb = (lt_io_callback_t)lt_ssl_recv;
-		callb_usr = c->ssl_conn;
+		lt_ssl_connection_destroy(conn->ssl_conn);
 	}
 #endif
+	lt_socket_destroy(conn->socket, lt_libc_heap);
 
-	lt_err_t err;
-
-	if ((err = lt_http_msg_create(&c->response, lt_libc_heap))) {
-		lt_werrf("failed to create response message: %S\n", lt_err_str(err));
-		goto err0;
-	}
-	c->response.version = LT_HTTP_1_1;
-	c->response.response_status_code = 200;
-	c->response.response_status_msg = CLSTR("OK");
-
-	if ((err = lt_http_parse_request(&c->request, read_callb, callb_usr, lt_libc_heap))) {
-		if (err != LT_ERR_CLOSED) {
-			lt_werrf("failed to parse http request: %S\n", lt_err_str(err));
-			c->keep_alive = 0;
-		}
-		else {
-			c->keep_alive = 0;
-		}
-		goto err1;
-	}
-
-	u32 addr = lt_sockaddr_ipv4_addr(&c->addr);
-	lt_ierrf("["FG_BYELLOW"C_%hd"RESET"] HTTP/%uw.%uw %S %S\n", addr,
-			LT_HTTP_VERSION_MAJOR(c->request.version),
-			LT_HTTP_VERSION_MINOR(c->request.version),
-			lt_http_method_str(c->request.request_method),
-			c->request.request_file);
-
-	c->uri = parse_uri(c->request.request_file);
-
-	lstr_t* conn_header = lt_http_find_header(&c->request, CLSTR("Connection"));
-	c->keep_alive = conn_header && lt_lseq_nocase(*conn_header, CLSTR("keep-alive"));
-
-	lt_hashtab_init(&c->vars);
-
-	if (server->on_request != NULL && server->on_request(c)) {
-
-	}
-	else if (srv_handle_mapped_request(server, c)) {
-
-	}
-	else if (server->on_unmapped_request != NULL) {
-		server->on_unmapped_request(c);
-	}
-	else {
-		LT_ASSERT(server->on_404 != NULL);
-		server->on_404(c);
-	}
-
-	lt_foreach_hashtab_entry(variable_t, var, &c->vars) {
-		lt_mfree(lt_libc_heap, var->val.str);
-		lt_mfree(lt_libc_heap, var);
-	}
-	lt_hashtab_free(&c->vars, lt_libc_heap);
-
-
-	lt_http_add_header(&c->response, CLSTR("Connection"), c->keep_alive ? CLSTR("keep-alive") : CLSTR("close"));
-	if (c->keep_alive) {
-		lt_http_add_header(&c->response, CLSTR("Keep-Alive"), CLSTR("timeout=5, max=99"));
-	}
-	lt_http_add_header(&c->response, CLSTR("Content-Type"), c->response_mime_type);
-	lt_http_write_response(&c->response, write_callb, callb_usr);
-
-	free_uri(&c->uri);
-
-	lt_http_msg_destroy(&c->request, lt_libc_heap);
-
-	if (c->keep_alive) {
-		lt_http_msg_destroy(&c->response, lt_libc_heap);
-		return;
-	}
-
-err1:	lt_http_msg_destroy(&c->response, lt_libc_heap);
-err0:
-#ifdef SSL
-		if (server->use_https) {
-			lt_ssl_connection_destroy(c->ssl_conn);
-		}
-#endif
-		lt_socket_destroy(c->socket, lt_libc_heap);
-}
-
-static
-void client_proc(connection_t* client) {
-	server_t* server = client->server;
-
-	on_accept(server, client);
-	while (client->keep_alive) {
-		lt_mzero(&client->request, sizeof(client->request));
-		lt_mzero(&client->response, sizeof(client->response));
-		lt_mzero(&client->uri, sizeof(client->uri));
-		client->response_mime_type = NLSTR();
-		on_accept(server, client);
-	}
-	client->active = 0;
+	conn->active = 0;
+	return;
 }
 
 static
@@ -412,8 +418,12 @@ on_404:
 void srv_map_(server_t* server, route_mapping_t mapping) {
 	lt_err_t err;
 
-	mapping.route = lt_lstrim_trailing_slash(mapping.route);
-	mapping.target = lt_lstrim_trailing_slash(mapping.target);
+	if (mapping.route.len > 1) {
+		mapping.route = lt_lstrim_trailing_slash(mapping.route);
+	}
+	if (mapping.target.len > 1) {
+		mapping.target = lt_lstrim_trailing_slash(mapping.target);
+	}
 
 	lt_ierrf("mapping '%S' to '%S'...\n", mapping.route, mapping.target);
 
