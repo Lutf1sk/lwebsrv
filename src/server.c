@@ -27,14 +27,14 @@ void client_proc(connection_t* conn) {
 
 		// set up i/o callbacks
 		LT_ASSERT(conn->socket);
-		lt_io_callback_t write_callb = (lt_io_callback_t)lt_socket_send;
-		lt_io_callback_t read_callb = (lt_io_callback_t)lt_socket_recv;
+		lt_write_fn_t write_callb = (lt_write_fn_t)lt_socket_send;
+		lt_read_fn_t read_callb = (lt_read_fn_t)lt_socket_recv;
 		void* callb_usr = conn->socket;
 #ifdef SSL
 		if (server->use_https) {
 			LT_ASSERT(conn->ssl_conn);
-			write_callb = (lt_io_callback_t)lt_ssl_send_fixed;
-			read_callb = (lt_io_callback_t)lt_ssl_recv_fixed;
+			write_callb = (lt_write_fn_t)lt_ssl_send_fixed;
+			read_callb = (lt_read_fn_t)lt_ssl_recv_fixed;
 			callb_usr = conn->ssl_conn;
 		}
 #endif
@@ -173,7 +173,7 @@ void listen_proc(server_t* server) {
 			u32 ipv4_addr = lt_sockaddr_ipv4_addr(&client_addr);
 			u16 ipv4_port = lt_sockaddr_ipv4_port(&client_addr);
 
-			client->thread = lt_thread_create((lt_thread_proc_t)client_proc, client, lt_libc_heap);
+			client->thread = lt_thread_create((lt_thread_fn_t)client_proc, client, lt_libc_heap);
 			if (!client->thread) {
 				lt_werrf("failed to create connection thread\n");
 				goto err3;
@@ -293,7 +293,7 @@ https_canceled:
 	}
 	lt_mzero(server->connections, connections_size);
 
-	server->listen_thread = lt_thread_create((lt_thread_proc_t)listen_proc, server, lt_libc_heap);
+	server->listen_thread = lt_thread_create((lt_thread_fn_t)listen_proc, server, lt_libc_heap);
 	if (!server->listen_thread) {
 		lt_ferrf("failed to create message thread\n");
 	}

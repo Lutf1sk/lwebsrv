@@ -10,9 +10,9 @@ struct lt_http_client {
 	lt_ssl_connection_t* conn;
 } lt_http_client_t;
 
-lt_err_t lt_http_client_connect(lt_http_client_t* out_client, const lt_sockaddr_t* addr, b8 use_https, lstr_t host, lt_alloc_t* alloc);
-void lt_http_client_destroy(const lt_http_client_t* client, lt_alloc_t* alloc);
+lt_err_t lt_http_client_connect(lt_http_client_t out_client[static 1], const lt_sockaddr_t addr[static 1], b8 use_https, lstr_t host, lt_alloc_t alloc[static 1]);
+void lt_http_client_destroy(const lt_http_client_t client[static 1], lt_alloc_t alloc[static 1]);
 
-lt_err_t lt_http_client_get(const lt_http_client_t* client, lt_http_msg_t* out_response, lstr_t endpoint, lt_alloc_t* alloc);
+lt_err_t lt_http_client_get(const lt_http_client_t client[static 1], lt_http_msg_t out_response[static 1], lstr_t endpoint, lt_alloc_t alloc[static 1]);
 
 #endif

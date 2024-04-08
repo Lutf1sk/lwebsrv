@@ -82,7 +82,7 @@ static b8 special_char_tab[256] = {
 	['~'] = 1,
 };
 
-void lt_md_render(lstr_t markdown, lstr_t link_base, lt_io_callback_t callb, void* usr) {
+void lt_md_render(lstr_t markdown, lstr_t link_base, lt_write_fn_t callb, void* usr) {
 	b8 quote = 0;
 
 	lt_writes(callb, usr, "<div>");

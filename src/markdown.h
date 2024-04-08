@@ -3,6 +3,6 @@
 
 #include <lt/lt.h>
 
-void lt_md_render(lstr_t markdown, lstr_t link_base, lt_io_callback_t callb, void* usr);
+void lt_md_render(lstr_t markdown, lstr_t link_base, lt_write_fn_t callb, void* usr);
 
 #endif

@@ -72,7 +72,7 @@ lstr_t consume_string(char** it, char* end) {
 }
 
 static
-void consume_and_write_text(lt_io_callback_t callb, void* usr, char** it, char* end) {
+void consume_and_write_text(lt_write_fn_t callb, void* usr, char** it, char* end) {
 	if (*it >= end) {
 		lt_werrf("unexpected end-of-file\n");
 		return;
@@ -103,7 +103,7 @@ void consume_and_write_text(lt_io_callback_t callb, void* usr, char** it, char* 
 	++*it;
 }
 
-isz template_render(lt_io_callback_t callb, void* usr, lstr_t template, connection_t* conn) {
+isz template_render(lt_write_fn_t callb, void* usr, lstr_t template, connection_t* conn) {
 	for (char* it = template.str, *end = it + template.len; it < end;) {
 		skip_space(&it, end);
 		if (it >= end) {
@@ -280,7 +280,7 @@ isz template_render(lt_io_callback_t callb, void* usr, lstr_t template, connecti
 lstr_t template_render_str(lstr_t template, connection_t* conn) {
 	lt_strstream_t ss;
 	LT_ASSERT(lt_strstream_create(&ss, lt_libc_heap) == LT_SUCCESS);
-	template_render((lt_io_callback_t)lt_strstream_write, &ss, template, conn);
+	template_render((lt_write_fn_t)lt_strstream_write, &ss, template, conn);
 	return ss.str;
 }
 

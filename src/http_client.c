@@ -4,7 +4,7 @@
 
 #include "http_client.h"
 
-lt_err_t lt_http_client_connect(lt_http_client_t* out_client, const lt_sockaddr_t* addr, b8 use_https, lstr_t host, lt_alloc_t* alloc) {
+lt_err_t lt_http_client_connect(lt_http_client_t out_client[static 1], const lt_sockaddr_t addr[static 1], b8 use_https, lstr_t host, lt_alloc_t alloc[static 1]) {
 	lt_err_t err;
 
 	lt_socket_t* socket = lt_socket_create(LT_SOCKTYPE_TCP, alloc);
@@ -36,7 +36,7 @@ lt_err_t lt_http_client_connect(lt_http_client_t* out_client, const lt_sockaddr_
 	return LT_SUCCESS;
 }
 
-void lt_http_client_destroy(const lt_http_client_t* client, lt_alloc_t* alloc) {
+void lt_http_client_destroy(const lt_http_client_t client[static 1], lt_alloc_t alloc[static 1]) {
 #ifdef SSL
 	if (client->use_https) {
 		lt_ssl_connection_destroy(client->conn);
@@ -45,7 +45,7 @@ void lt_http_client_destroy(const lt_http_client_t* client, lt_alloc_t* alloc) {
 	lt_socket_destroy(client->socket, alloc);
 }
 
-lt_err_t lt_http_client_get(const lt_http_client_t* client, lt_http_msg_t* out_response, lstr_t endpoint, lt_alloc_t* alloc) {
+lt_err_t lt_http_client_get(const lt_http_client_t client[static 1], lt_http_msg_t out_response[static 1], lstr_t endpoint, lt_alloc_t alloc[static 1]) {
 	lt_err_t err;
 
 	lt_http_msg_t request;
@@ -61,14 +61,14 @@ lt_err_t lt_http_client_get(const lt_http_client_t* client, lt_http_msg_t* out_r
 	lt_http_add_header(&request, CLSTR("Accept-Language"), CLSTR("*/*"));
 	request.body = NLSTR();
 
-	lt_io_callback_t write_callb = (lt_io_callback_t)lt_socket_send;
-	lt_io_callback_t read_callb = (lt_io_callback_t)lt_socket_recv;
+	lt_write_fn_t write_callb = (lt_write_fn_t)lt_socket_send;
+	lt_read_fn_t read_callb = (lt_read_fn_t)lt_socket_recv;
 	void* usr = client->socket;
 
 #ifdef SSL
 	if (client->use_https) {
-		write_callb = (lt_io_callback_t)lt_ssl_send_fixed;
-		read_callb = (lt_io_callback_t)lt_ssl_recv_fixed;
+		write_callb = (lt_write_fn_t)lt_ssl_send_fixed;
+		read_callb = (lt_read_fn_t)lt_ssl_recv_fixed;
 		usr = client->conn;
 	}
 #endif
