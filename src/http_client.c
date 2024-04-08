@@ -1,4 +1,3 @@
-#include <lt/net.h>
 #include <lt/ssl.h>
 #include <lt/http.h>
 

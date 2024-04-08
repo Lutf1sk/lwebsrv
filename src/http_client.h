@@ -1,6 +1,7 @@
 #ifndef LT_HTTP_CLIENT
 
 #include <lt/err.h>
+#include <lt/net.h>
 
 typedef
 struct lt_http_client {
