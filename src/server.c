@@ -24,7 +24,7 @@ void on_client_connected(server_t server[static 1], u32 cid, lt_arena_t arena[st
 
 #ifdef SSL
 	if (server->use_https) {
-		callb_usr = server->ssl_conn = lt_ssl_accept(client_socket);
+		callb_usr = conn->ssl_conn = lt_ssl_accept(conn->socket);
 		if (!callb_usr) {
 			lt_werrf("ssl handshake failed\n");
 			return;
