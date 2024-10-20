@@ -33,9 +33,11 @@ lstr_t* uri_find_param(uri_t* uri, lstr_t param);
 
 typedef
 struct connection {
-	volatile b8 active;
 	b8 keep_alive;
-
+	volatile u32 next_free;
+	server_t* server;
+	lt_arena_t* arena;
+	lt_mutex_t* mutex;
 	lt_thread_t* thread;
 
 #ifdef SSL
@@ -51,8 +53,6 @@ struct connection {
 	lstr_t response_mime_type;
 
 	lt_hashtab_t vars;
-
-	server_t* server;
 
 	void* usr;
 } connection_t;
@@ -77,6 +77,7 @@ typedef
 struct server {
 	u16 port;
 	usz max_connections;
+	usz max_request_memory;
 	b8 (*on_request)(connection_t* c);
 	void (*on_unmapped_request)(connection_t* c);
 	void (*on_404)(connection_t* c);
@@ -92,13 +93,13 @@ struct server {
 	lt_socket_t* socket;
 	lt_thread_t* listen_thread;
 	connection_t* connections;
-
-	usz total_connection_count;
+	volatile u32 first_free;
 
 	lt_darr(route_mapping_t) mappings;
 } server_t;
 
-#define SRV_DEFAULT_MAX_CONNECTIONS 128
+#define SRV_DEFAULT_MAX_CONNECTIONS 32
+#define SRV_DEFAULT_MAX_REQUEST_MEMORY LT_MB(8)
 
 typedef
 struct variable {

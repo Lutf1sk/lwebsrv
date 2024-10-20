@@ -14,56 +14,40 @@
 #include "template.h"
 
 static
-void client_proc(connection_t* conn) {
+void on_client_connected(server_t server[static 1], u32 cid, lt_arena_t arena[static 1]) {
 	lt_err_t err;
 
-	server_t* server = conn->server;
+	connection_t* conn        = &server->connections[cid];
+	lt_write_fn_t write_callb = (lt_write_fn_t)lt_socket_send;
+	lt_read_fn_t  read_callb  = (lt_read_fn_t) lt_socket_recv;
+	void*         callb_usr   = conn->socket;
 
-	do {
-		lt_mzero(&conn->request, sizeof(conn->request));
-		lt_mzero(&conn->response, sizeof(conn->response));
-		lt_mzero(&conn->uri, sizeof(conn->uri));
-		conn->response_mime_type = NLSTR();
-
-		// set up i/o callbacks
-		LT_ASSERT(conn->socket);
-		lt_write_fn_t write_callb = (lt_write_fn_t)lt_socket_send;
-		lt_read_fn_t read_callb = (lt_read_fn_t)lt_socket_recv;
-		void* callb_usr = conn->socket;
 #ifdef SSL
-		if (server->use_https) {
-			LT_ASSERT(conn->ssl_conn);
-			write_callb = (lt_write_fn_t)lt_ssl_send_fixed;
-			read_callb = (lt_read_fn_t)lt_ssl_recv_fixed;
-			callb_usr = conn->ssl_conn;
+	if (server->use_https) {
+		callb_usr = server->ssl_conn = lt_ssl_accept(client_socket);
+		if (!callb_usr) {
+			lt_werrf("ssl handshake failed\n");
+			return;
 		}
+		write_callb = (lt_write_fn_t)lt_ssl_send_fixed;
+		read_callb  = (lt_read_fn_t)lt_ssl_recv_fixed;
+	}
 #endif
 
-		// create response
-		if ((err = lt_http_msg_create(&conn->response, lt_libc_heap))) {
-			lt_werrf("failed to create response message: %S\n", lt_err_str(err));
-			goto err0;
-		}
-		conn->response.version = LT_HTTP_1_1;
-		conn->response.response_status_code = 200;
-		conn->response.response_status_msg = CLSTR("OK");
+	lt_alloc_t* alloc = &arena->interf;
+
+	do {
+		lt_amreset(arena);
 
 		// read and parse request
-		if ((err = lt_http_parse_request(&conn->request, read_callb, callb_usr, lt_libc_heap))) {
+		lt_mzero(&conn->request, sizeof(conn->request));
+		if ((err = lt_http_parse_request(&conn->request, read_callb, callb_usr, alloc))) {
 			if (err != LT_ERR_CLOSED) {
 				lt_werrf("failed to parse http request: %S\n", lt_err_str(err));
-				conn->keep_alive = 0;
 			}
-			else {
-				conn->keep_alive = 0;
-			}
-			goto err1;
+			conn->keep_alive = 0;
+			return;
 		}
-
-		// parse uri
-		conn->uri = parse_uri(conn->request.request_file);
-
-		// logging
 		u32 addr = lt_sockaddr_ipv4_addr(&conn->addr);
 		lt_ierrf("["FG_BYELLOW"C_%hd"RESET"] HTTP/%uw.%uw %S %S\n", addr,
 				LT_HTTP_VERSION_MAJOR(conn->request.version),
@@ -71,12 +55,22 @@ void client_proc(connection_t* conn) {
 				lt_http_method_str(conn->request.request_method),
 				conn->request.request_file);
 
-		// read request connection header
+		conn->uri = parse_uri(conn->request.request_file);
+
 		lstr_t* conn_header = lt_http_find_header(&conn->request, CLSTR("Connection"));
 		conn->keep_alive = conn_header && lt_lseq_nocase(*conn_header, CLSTR("keep-alive"));
 
+		// create response
+		lt_mzero(&conn->response, sizeof(conn->response));
+		if ((err = lt_http_msg_create(&conn->response, alloc))) {
+			lt_werrf("failed to create response message: %S\n", lt_err_str(err));
+			break;
+		}
+		conn->response.version              = LT_HTTP_1_1;
+		conn->response.response_status_code = 200;
+		conn->response.response_status_msg  = CLSTR("OK");
 
-		// initialize template variables
+		conn->response_mime_type = NLSTR();
 		lt_hashtab_init(&conn->vars);
 
 		// route parsed request
@@ -92,42 +86,45 @@ void client_proc(connection_t* conn) {
 			server->on_404(conn);
 		}
 
-		// add response connection header
-		lt_http_add_header(&conn->response, CLSTR("Connection"), conn->keep_alive ? CLSTR("keep-alive") : CLSTR("close"));
 		if (conn->keep_alive) {
+			lt_http_add_header(&conn->response, CLSTR("Connection"), CLSTR("keep-alive"));
 			lt_http_add_header(&conn->response, CLSTR("Keep-Alive"), CLSTR("timeout=5, max=99"));
+		}
+		else {
+			lt_http_add_header(&conn->response, CLSTR("Connection"), CLSTR("close"));
 		}
 		lt_http_add_header(&conn->response, CLSTR("Content-Type"), conn->response_mime_type);
 
-		// write response
 		if ((err = lt_http_write_response(&conn->response, write_callb, callb_usr))) {
 			lt_werrf("failed to send response message: %S\n", lt_err_str(err));
 		}
 
 		// cleanup
-		lt_foreach_hashtab_entry(variable_t, var, &conn->vars) {
-			lt_mfree(lt_libc_heap, var->val.str);
-			lt_mfree(lt_libc_heap, var);
-		}
-		lt_hashtab_free(&conn->vars, lt_libc_heap);
 		free_uri(&conn->uri);
-		lt_http_msg_destroy(&conn->request, lt_libc_heap);
-		lt_http_msg_destroy(&conn->response, lt_libc_heap);
-		continue;
-
-		err1:	lt_http_msg_destroy(&conn->response, lt_libc_heap);
-		err0:	break;
 	} while (conn->keep_alive);
+}
+
+static
+void connection_proc(connection_t* conn) {
+	server_t* server = conn->server;
+	u32 cid = conn - conn->server->connections;
+
+	while (!server->done) {
+		lt_mutex_lock(conn->mutex);
+
+		on_client_connected(server, cid, conn->arena);
 
 #ifdef SSL
-	if (server->use_https) {
-		lt_ssl_connection_destroy(conn->ssl_conn);
-	}
+		if (server->use_https && conn->ssl_conn) { // !! ssl_conn can be null
+			lt_ssl_connection_destroy(conn->ssl_conn);
+		}
 #endif
-	lt_socket_destroy(conn->socket, lt_libc_heap);
+		lt_socket_destroy(conn->socket, lt_libc_heap);
 
-	conn->active = 0;
-	return;
+		// !! race condition
+		conn->next_free    = server->first_free;
+		server->first_free = cid;
+	}
 }
 
 static
@@ -138,80 +135,45 @@ void listen_proc(server_t* server) {
 		lt_socket_t* client_socket = lt_socket_accept(server->socket, &client_addr, lt_libc_heap);
 		if (!client_socket) {
 			lt_werrf("failed to accept client: %S\n", lt_err_str(lt_errno()));
-			goto err0;
+			goto err;
 		}
 
-#ifdef SSL
-		lt_ssl_connection_t* ssl_conn = NULL;
-		if (server->use_https && !(ssl_conn = lt_ssl_accept(client_socket))) {
-			lt_werrf("ssl handshake failed\n");
-			goto err1;
+		u32 ipv4_addr = lt_sockaddr_ipv4_addr(&client_addr);
+		u16 ipv4_port = lt_sockaddr_ipv4_port(&client_addr);
+
+		lt_ierrf("["FG_BYELLOW"C_%hd"RESET"] accepted incoming connection from %ub.%ub.%ub.%ub:%uw\n", ipv4_addr,
+				(ipv4_addr >> 24), (ipv4_addr >> 16) & 0xFF, (ipv4_addr >> 8) & 0xFF, ipv4_addr & 0xFF, ipv4_port);
+
+		u32 cid = server->first_free;
+		if (cid == ~0) {
+			lt_printf("pool is full, dropping connection...\n");
+			goto err;
 		}
-#endif
-
-		server->total_connection_count++;
-
-		connection_t* client = NULL;
-		for (usz i = 0; i < server->max_connections; ++i) {
-			if (server->connections[i].active) {
-				continue;
-			}
-
-			client = &server->connections[i];
-			client->active = 1;
-			client->socket = client_socket;
-			client->addr = client_addr;
-			client->server = server;
-			if (client->thread) {
-				lt_thread_join(client->thread, lt_libc_heap);
-				client->thread = NULL;
-			}
-#ifdef SSL
-			client->ssl_conn = ssl_conn;
-#endif
-
-			u32 ipv4_addr = lt_sockaddr_ipv4_addr(&client_addr);
-			u16 ipv4_port = lt_sockaddr_ipv4_port(&client_addr);
-
-			client->thread = lt_thread_create((lt_thread_fn_t)client_proc, client, lt_libc_heap);
-			if (!client->thread) {
-				lt_werrf("failed to create connection thread\n");
-				goto err3;
-			}
-
-			lt_ierrf("["FG_BYELLOW"C_%hd"RESET"] accepted incoming connection from %ub.%ub.%ub.%ub:%uw\n", ipv4_addr,
-					(ipv4_addr >> 24), (ipv4_addr >> 16) & 0xFF, (ipv4_addr >> 8) & 0xFF, ipv4_addr & 0xFF, ipv4_port);
-			break;
-		}
-
-		if (!client) {
-			lt_werrf("connection limit reached, dropped incoming connection\n");
-			goto err2;
-		}
+		connection_t* client = &server->connections[cid];
+		server->first_free = client->next_free; // !! race condition
+		
+		client->socket = client_socket;
+		client->addr   = client_addr;
+		lt_mutex_release(client->mutex);
 		continue;
 
-	err3:	client->active = 0;
-	err2:
-#ifdef SSL
-			lt_ssl_connection_destroy(ssl_conn);
-#endif
-	err1:	lt_socket_destroy(client_socket, lt_libc_heap);
-	err0:
+	err:
+		lt_socket_destroy(client_socket, lt_libc_heap);
 	}
 }
 
 void srv_set_var_moved(connection_t* conn, lstr_t key, lstr_t val) {
-	variable_t* var = lt_malloc(lt_libc_heap, sizeof(*var));
+	variable_t* var = lt_amalloc(conn->arena, sizeof(*var));
 	LT_ASSERT(var);
 	*var = (variable_t) {
 			.key = key,
 			.val = val };
 
-	lt_hashtab_insert(&conn->vars, lt_hashls(key), var, lt_libc_heap);
+	lt_hashtab_insert(&conn->vars, lt_hashls(key), var, &conn->arena->interf);
 }
 
 void srv_set_var(connection_t* conn, lstr_t key, lstr_t val) {
-	srv_set_var_moved(conn, key, lt_strdup(lt_libc_heap, val));
+	srv_set_var_moved(conn, key, lt_strdup(&conn->arena->interf, val));
 }
 
 #define var_is_equal(key_, var) (lt_lseq((key_), (var)->key))
@@ -274,7 +236,11 @@ https_canceled:
 	}
 
 	if (server->max_connections == 0) {
-		server->max_connections = 128;
+		server->max_connections = SRV_DEFAULT_MAX_CONNECTIONS;
+	}
+
+	if (server->max_request_memory == 0) {
+		server->max_request_memory = SRV_DEFAULT_MAX_REQUEST_MEMORY;
 	}
 
 	server->socket = lt_socket_create(LT_SOCKTYPE_TCP, lt_libc_heap);
@@ -286,12 +252,22 @@ https_canceled:
 		lt_ferrf("failed to bind server port: %S\n", lt_err_str(err));
 	}
 
-	usz connections_size = server->max_connections * sizeof(connection_t);
+	usz connections_size = server->max_connections * sizeof(*server->connections);
 	server->connections = lt_malloc(lt_libc_heap, connections_size);
 	if (!server->connections) {
 		lt_ferrf("failed to allocate connection array\n");
 	}
-	lt_mzero(server->connections, connections_size);
+
+	for (usz i = 0; i < server->max_connections; ++i) {
+		connection_t* conn = &server->connections[i];
+		conn->server = server;
+		conn->next_free = i + 1;
+		conn->arena = lt_amcreate(NULL, server->max_request_memory, 0);
+		conn->mutex = lt_mutex_create(lt_libc_heap);
+		lt_mutex_lock(conn->mutex);
+		conn->thread = lt_thread_create((lt_thread_fn_t)connection_proc, conn, lt_libc_heap);
+	}
+	server->connections[server->max_connections - 1].next_free = ~0;
 
 	server->listen_thread = lt_thread_create((lt_thread_fn_t)listen_proc, server, lt_libc_heap);
 	if (!server->listen_thread) {
@@ -308,27 +284,12 @@ void srv_stop(server_t* server) {
 	lt_socket_destroy(server->socket, lt_libc_heap);
 
 	for (usz i = 0; i < server->max_connections; ++i) {
-		connection_t* client = &server->connections[i];
-		if (!client->thread) {
-			continue;
-		}
-#ifdef SSL
-		if (server->use_https && client->active) { // !! unlikely but possible race condition
-			lt_ssl_connection_shutdown(client->ssl_conn);
-		}
-		else if (!server->use_https)
-#endif
-		if (client->active) {
-			lt_socket_close(client->socket);
-		}
-
-		lt_thread_join(client->thread, lt_libc_heap);
+		lt_amdestroy(server->connections[i].arena);
+		lt_mutex_destroy(server->connections[i].mutex, lt_libc_heap);
+		//lt_thread_join(server->connections[i].thread, lt_libc_heap);
 	}
-
 	lt_mfree(lt_libc_heap, server->connections);
-	if (server->mappings) {
-		lt_darr_destroy(server->mappings);
-	}
+	lt_darr_destroy(server->mappings);
 
 #ifdef SSL
 	lt_ssl_terminate(LT_SSL_SERVER | LT_SSL_CLIENT);
@@ -347,7 +308,7 @@ b8 srv_handle_mapped_request(server_t* server, connection_t* conn) {
 
 		if (m->type == RMAP_FILE && lt_lseq(conn->uri.page, m->route)) {
 			lstr_t data = NLSTR();
-			if ((err = lt_freadallp(m->target, &data, lt_libc_heap))) {
+			if ((err = lt_freadallp(m->target, &data, &conn->arena->interf))) {
 				lt_werrf("failed to read '%S': %S\n", m->target, lt_err_str(err));
 			}
 
@@ -358,13 +319,12 @@ b8 srv_handle_mapped_request(server_t* server, connection_t* conn) {
 
 		else if (m->type == RMAP_TEMPLATE && lt_lseq(conn->uri.page, m->route)) {
 			lstr_t data = NLSTR();
-			if ((err = lt_freadallp(m->target, &data, lt_libc_heap))) {
+			if ((err = lt_freadallp(m->target, &data, &conn->arena->interf))) {
 				lt_werrf("failed to read '%S': %S\n", m->target, lt_err_str(err));
 			}
 
 			conn->response_mime_type = m->mime_type;
 			conn->response.body = template_render_str(data, conn);
-			lt_mfree(lt_libc_heap, data.str);
 			return 1;
 		}
 
@@ -379,7 +339,7 @@ b8 srv_handle_mapped_request(server_t* server, connection_t* conn) {
 
 void srv_handle_dir_mapping(connection_t* conn, lstr_t route, lstr_t target, lstr_t mime_type_override) {
 	lstr_t file = LSTR(conn->uri.page.str + route.len, conn->uri.page.len - route.len);
-	lstr_t load_path = lt_lsbuild(lt_libc_heap, "%S/%S", target, file);
+	lstr_t load_path = lt_lsbuild(&conn->arena->interf, "%S/%S", target, file);
 
 	lt_err_t err;
 
@@ -394,12 +354,10 @@ void srv_handle_dir_mapping(connection_t* conn, lstr_t route, lstr_t target, lst
 	}
 
 	lstr_t data = NLSTR();
-	if ((err = lt_freadallp(load_path, &data, lt_libc_heap))) {
+	if ((err = lt_freadallp(load_path, &data, &conn->arena->interf))) {
 		lt_werrf("failed to read '%S': %S\n", load_path, lt_err_str(err));
 		goto on_404;
 	}
-
-	lt_mfree(lt_libc_heap, load_path.str);
 
 	if (mime_type_override.len) {
 		conn->response_mime_type = mime_type_override;
@@ -412,7 +370,6 @@ void srv_handle_dir_mapping(connection_t* conn, lstr_t route, lstr_t target, lst
 
 on_404:
 	conn->server->on_404(conn);
-	lt_mfree(lt_libc_heap, load_path.str);
 }
 
 void srv_map_(server_t* server, route_mapping_t mapping) {

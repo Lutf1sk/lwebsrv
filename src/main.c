@@ -56,14 +56,7 @@ int main(int argc, char** argv) {
 		}
 
 		if ((key & LT_TERM_KEY_MASK) == 's' || (key & LT_TERM_KEY_MASK) == 'S') {
-			usz open_count = 0;
-			for (usz i = 0; i < server.max_connections; ++i) {
-				if (server.connections[i].active) {
-					++open_count;
-				}
-			}
 
-			lt_printf("%uz open connections, %uz total\n", open_count, server.total_connection_count);
 		}
 	}
 	return 0;

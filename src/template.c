@@ -279,7 +279,7 @@ isz template_render(lt_write_fn_t callb, void* usr, lstr_t template, connection_
 
 lstr_t template_render_str(lstr_t template, connection_t* conn) {
 	lt_strstream_t ss;
-	LT_ASSERT(lt_strstream_create(&ss, lt_libc_heap) == LT_SUCCESS);
+	LT_ASSERT(lt_strstream_create(&ss, &conn->arena->interf) == LT_SUCCESS);
 	template_render((lt_write_fn_t)lt_strstream_write, &ss, template, conn);
 	return ss.str;
 }
