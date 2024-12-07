@@ -1,7 +1,7 @@
 # lwebsrv
-An http/https server, with its own simple template format aiming for easy interoperability with your C code.
-This repository comes an example page.
-All configuration is done in the source code before building.
+An http/https server, with its own simple template format aiming for easy interoperability with C code.
+This repository comes with an example page.
+All configuration is done in source code.
 
 ## Build
 
@@ -15,5 +15,5 @@ Binaries are installed to `/usr/local/bin/` by default.
 
 ```
 git clone --recursive https://lutfisk.net/git/lwebsrv/.git
-sudo make install
+sudo make install -C lwebsrv
 ```
